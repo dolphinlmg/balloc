@@ -5,25 +5,33 @@
 extern void debug(const char *fmt, ...);
 extern void *sbrk(intptr_t increment);
 
+void myfree(void* ptr);
+void *myrealloc(void *ptr, size_t size);
+void *myalloc(size_t size);
+
 typedef enum {false, true} bool;
 
 typedef struct _allocatedChunk{
-    uint64_t prev_size;
-    uint64_t size;
+    size_t prev_size;
+    size_t size;
 } allocatedChunk;
 
 typedef struct _freeChunk{
-    uint64_t prev_size;
-    uint64_t size;
-    struct freeChunk* fd;
-    struct freeChunk* bk;
+    size_t prev_size;
+    size_t size;
+    struct _freeChunk* fd;
+    struct _freeChunk* bk;
 } freeChunk;
 
 allocatedChunk* topChunk;
-freeChunk* fastBins[10];
-freeChunk* unsortedBins;
+freeChunk fastBins[10];
+freeChunk unsortedBins;
 
 bool isMallocInited = false;
+
+void dumpChunk(void* chunk){
+    debug("dumpChunk:\n0x%p 0x%p\n0x%p 0x%p\n", *((uint64_t*)chunk), *((uint64_t*)chunk+1), *((uint64_t*)chunk+2), *((uint64_t*)chunk+3));
+}
 
 // initalize Bins & topChunk
 void isFirst(){
@@ -34,11 +42,11 @@ void isFirst(){
     
     // initalize fastBins
     for (int i = 0; i < 10; i++){
-        fastBins[i] = NULL;
+        memset(&fastBins[i], 0, sizeof(freeChunk));
     }
 
     // initalize unsortedBins
-    unsortedBins = NULL;
+    memset(&unsortedBins, 0, sizeof(freeChunk));
 
     // allocate topChunk
     topChunk = (allocatedChunk*)sbrk(0x10000);
@@ -49,14 +57,18 @@ void isFirst(){
 
 // find in fastBins
 freeChunk* findInFastBins(size_t size){
-    freeChunk* tmp = fastBins[(size-0x20)>>4];
-    //debug("fastBin[%d]: 0x%p\n", (size-0x20)>>4, tmp);
-    while(tmp != NULL){
+    freeChunk* FD = &fastBins[(size-0x20)>>4];
+    debug("fastBin[%d].fd: 0x%p\n", (size-0x20)>>4, FD->fd);
+    if(FD->fd != NULL && FD->size == size){
+        dumpChunk(FD->fd);
         // when find
-        if(tmp->size == size) return tmp;
-        tmp = tmp->fd;
+        debug("FD->fd: %p\n", FD->fd);
+        freeChunk* ret = FD->fd;
+        FD->fd = FD->fd->fd;
+        debug("FD->fd: %p\n", FD->fd);
+        debug("found chunk in fastBins: %p\n", ret);
+        return ret;
     }
-    //debug("finish search\n");
     return NULL;
 }
 
@@ -68,74 +80,126 @@ freeChunk* findInUnsortedBins(size_t size){
 
 // allocate using topChunk 
 allocatedChunk* allocateInTopChunk(size_t size){
-    uint64_t topChunkSize = topChunk->size;
+    size_t topChunkSize = topChunk->size;
     allocatedChunk* p = topChunk;
     topChunk = (allocatedChunk*)((char*)topChunk + size);
     p->size = size;
     topChunk->size = topChunkSize - size;
+    debug("AllocUsingTopChunk:0x%x\tTopChunk: %p\tSize: 0x%x\treturn: %p\n", size, topChunk, topChunk->size, p);
     return p;
 }
 
 // expand topChunk
 bool reallocTopChunk(size_t size){
     if(sbrk(size) == -1) return false;
-    topChunk->size += size;
+//    debug("reallocTopChunk: 0x%x\n", topChunk->size);
+    topChunk->size = topChunk->size + size;
+   debug("reallocedTopChunk: 0x%x\n\n", topChunk->size);
     return true;
+}
+
+void pushInFastBins(freeChunk* p){
+    freeChunk* chk = &fastBins[(p->size-0x20)>>4];
+    debug("fastBin[%d].fd: %p\n",(p->size-0x20)>>4, chk->fd);
+    p->fd = NULL;
+    if(chk->fd != NULL)
+        p->fd = chk;
+    fastBins[(p->size-0x20)>>4].fd = p;
+    debug("fastBin[%d].fd: %p\tp->fd: 0x%p\n",(p->size-0x20)>>4, fastBins[(p->size-0x20)>>4].fd, p->fd);
 }
 
 void *myalloc(size_t size)
 {
     if(!size) return NULL;
+    debug("\nmyalloc called: 0x%x\n", size);
     isFirst();
     // alignment by 8bytes
     size = ((size & 15) > 0) ? (size & -16) + 0x10 : size; 
     size += 0x10;
 
-    //debug("Allocated size: 0x%x\n", size);
+    debug("aligned size: 0x%x\n", size);
 
-    void* p;
+    void* p = NULL;
     if(size <= 0x80){
         p = findInFastBins(size);
     }else{
         p = findInUnsortedBins(size);
     }    
-    if(p != NULL) return p;
+    if(p != NULL){
+       debug("alloc(0x%x): %p\n", size, (char*)p+0x10);
+       return (char*)p+0x10;
+    }
 
-    //debug("alloc(%x): %p\n", (unsigned int)size, (char*)p + 0x10); 
-
-    if(topChunk->size >= size){
+    debug("Can't find in bins\n");
+    /*
+    */
+    if(topChunk->size > size){
         p = allocateInTopChunk(size);
     }else{
         while(topChunk->size <= size)
             if(reallocTopChunk(0x10000) == false)
                 return NULL;
+        
         p = allocateInTopChunk(size);
     }
+    debug("alloc(0x%x): %p\n", (unsigned int)size, (char*)p + 0x10); 
+    /*
+    */
+//    p = sbrk(size);
 
     //debug("max: %u\n", max_size);
     //debug("allcated: %p\nsize: 0x%x\n\n", p, size);
-    return (char*)p + 0x10;
+    if(p != NULL)
+        return (char*)p + 0x10;
+    return NULL;
 }
 
 void *myrealloc(void *ptr, size_t size)
 {
+    debug("\nmyrealloc called:%p 0x%x\n",ptr, size);
     void *p = NULL;
-    if (size != 0)
-    {
-        p = sbrk(size);
-        if (ptr)
-            memcpy(p, ptr, size);
+    size_t alignedSize = ((size & 15) > 0) ? (size & -16) + 0x10 : size; 
+    alignedSize += 0x10;
+    if(ptr == NULL) {
+        p = myalloc(size);
+        return p;
+        //debug("myrealloc2: 0x%x\n", size);
+    } else if (size != 0) {
+        if(((allocatedChunk*)(ptr-0x10))->size == alignedSize) return ptr;
+        if(size <= 0x80){
+            p = findInFastBins(alignedSize);
+        }else{
+            p = findInUnsortedBins(alignedSize);
+        }
+        if(p != NULL){
+            memcpy(p+0x10, ptr, size);
+        }else{
+            while(topChunk->size <= alignedSize) 
+                if(reallocTopChunk(0x10000) == false)
+                    return NULL;
+            
+            p = allocateInTopChunk(alignedSize);
+            memcpy(p+0x10, ptr, size);
+            myfree(ptr+0x10);
+        }
         //max_size += size;
         //debug("max: %u\n", max_size);
     }
-    //debug("realloc(%p, %u): %p\n", ptr, (unsigned int)size, p);
-    return p;
+    //debug("realloc(%p, 0x%x): %p\n\n", ptr, size, p);
+    if(p != NULL)
+        return p+0x10;
+    return NULL;
 }
 
 void myfree(void *ptr)
 {
-    //debug("free(%p)\n", ptr);
-    struct freeChunk* chunk = (struct freeChunk*)ptr;
+    debug("\nmyfree called: %p\n", ptr);
+    if(!ptr) return;
+    freeChunk* chk = (freeChunk*)((char*)ptr-0x10);
+    debug("prev_size: 0x%x, size: 0x%x, data: 0x%x\n", chk->prev_size, chk->size, *(uint64_t*)((char*)(chk)+0x10));
+    if(chk->size <= 0x80){
+        pushInFastBins(chk);
+    }
     //if(chunk->size <= 0x80)
 
 

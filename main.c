@@ -7,7 +7,7 @@
 #include "printf.h"
 
 /* Comment out to disable debug prints (e.g. for performance testing) */
-#define DEBUG 1
+#define DEBUG 0
 
 unsigned int replaybuf[1024];
 void * allocations[8192 * 8];
@@ -71,9 +71,12 @@ int main()
     }
 
     getrusage(RUSAGE_SELF, &usage);
-    sz = sprintf(buf, "\tUser time: %f seconds\n\tMax RSS: %ld kilobytes\n",
+    /*sz = sprintf(buf, "\tUser time: %f seconds\n\tMax RSS: %ld kilobytes\n",
             usage.ru_utime.tv_sec + usage.ru_utime.tv_usec / 1000000.0f,
-            usage.ru_maxrss);
+            usage.ru_maxrss);*/
+    sz = sprintf(buf, "\tUser time: %f seconds\n\tMax RSS: %ld kilobytes\n\tTest: %ld, %ld\n",
+            usage.ru_utime.tv_sec + usage.ru_utime.tv_usec / 1000000.0f,
+            usage.ru_maxrss, usage.ru_utime.tv_sec, usage.ru_utime.tv_usec);
     write(STDOUT_FILENO, buf, sz);
 
     return 0;
