@@ -105,6 +105,13 @@ bool reallocTopChunk(size_t size){
 void pushInFastBins(freeChunk* p){
     freeChunk* chk = &fastBins[(p->size-0x20)>>4];
     debug("fastBin[%d].fd: %p\n",(p->size-0x20)>>4, chk->fd);
+    if( ((char*)p+(p->size&-2)) == ((char*)topChunk) ){
+        debug("next chunk is topChunk!\n");
+        p->size = topChunk->size + (p->size&-2);
+        debug("make topChunk size to:0x%lx\n", p->size);
+        topChunk = p;
+        return;
+    }
     p->fd = NULL;
     if(chk->fd != NULL)
         p->fd = chk;
@@ -114,7 +121,8 @@ void pushInFastBins(freeChunk* p){
 
 void pushInUnsortedBins(freeChunk* p){
     freeChunk* chk = &unsortedBins;
-    debug("unsortedBins is at: %p\n", chk);
+    debug("unsortedBins is at: %p\tunsortedBin.fd: %p\tunsortedBin.bk: %p\n", chk, chk->fd, chk->bk);
+    
 }
 
 // update for inuse bit
