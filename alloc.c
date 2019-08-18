@@ -30,7 +30,7 @@ freeChunk unsortedBins;
 bool isMallocInited = false;
 
 void dumpChunk(void* chunk){
-    debug("dumpChunk:\n0x%p 0x%p\n0x%p 0x%p\n", *((uint64_t*)chunk), *((uint64_t*)chunk+1), *((uint64_t*)chunk+2), *((uint64_t*)chunk+3));
+    debug("dumpChunk in 0x%p:\n0x%p 0x%p\n0x%p 0x%p\n", chunk, *((uint64_t*)chunk), *((uint64_t*)chunk+1), *((uint64_t*)chunk+2), *((uint64_t*)chunk+3));
 }
 
 // initalize Bins & topChunk
@@ -80,18 +80,6 @@ freeChunk* findInUnsortedBins(size_t size){
     return NULL;
 }
 
-// allocate using topChunk 
-// get size without inuse bit
-allocatedChunk* allocateInTopChunk(size_t size){
-    size_t topChunkSize = topChunk->size;
-    allocatedChunk* p = topChunk;
-    topChunk = (allocatedChunk*)((char*)topChunk + size);
-    p->size = size | 1;
-    topChunk->size = topChunkSize - size;
-    debug("AllocUsingTopChunk:0x%x\tTopChunk: %p\tSize: 0x%x\treturn: %p\n", size, topChunk, topChunk->size, p);
-    return p;
-}
-
 // expand topChunk
 // get size without inuse bit
 bool reallocTopChunk(size_t size){
@@ -102,6 +90,22 @@ bool reallocTopChunk(size_t size){
     return true;
 }
 
+// allocate using topChunk 
+// get size without inuse bit
+allocatedChunk* allocateInTopChunk(size_t size){
+    size_t topChunkSize = topChunk->size;
+    allocatedChunk* p = topChunk;
+    topChunk = (allocatedChunk*)((char*)topChunk + size);
+    p->size = size | 1;
+    p->prev_size = 0;
+    topChunk->size = topChunkSize - size;
+    debug("AllocUsingTopChunk:0x%x\tTopChunk: %p\tSize: 0x%x\treturn: %p\n", size, topChunk, topChunk->size, p);
+    if((topChunk->size&-2) < 0x20){
+        reallocTopChunk(0x10000);
+    }
+    return p;
+}
+
 void pushInFastBins(freeChunk* p){
     freeChunk* chk = &fastBins[(p->size-0x20)>>4];
     debug("fastBin[%d].fd: %p\n",(p->size-0x20)>>4, chk->fd);
@@ -109,7 +113,7 @@ void pushInFastBins(freeChunk* p){
     if( ((char*)p+(p->size&-2)) == ((char*)topChunk) ){
         debug("fastBins: next chunk is topChunk!\n");
         p->size = topChunk->size + (p->size&-2);
-        debug("make topChunk size to:0x%lx\n", p->size);
+        debug("make topChunk and size to:0x%lx, 0x%lx\n", p, p->size);
         topChunk = p;
         return;
     }
@@ -125,14 +129,23 @@ void pushInUnsortedBins(freeChunk* p){
     debug("unsortedBins is at: %p\tunsortedBin.fd: %p\tunsortedBin.bk: %p\n", chk, chk->fd, chk->bk);
     if( ((char*)p+(p->size&-2)) == ((char*)topChunk) ){
         debug("unsortedBins: next chunk is topChunk!\n");
+        dumpChunk(p);
+        dumpChunk(topChunk);
         p->size = topChunk->size + (p->size&-2);
-        debug("make topChunk size to:0x%lx\n", p->size);
+        debug("make topChunk and size to:0x%lx, 0x%lx\n", p, p->size);
         topChunk = p;
         return;
     }
-    ((freeChunk*)((char*)p+(p->size&-2)))->prev_size = (p->size&-2);
+    freeChunk* nextChunk = (freeChunk*)((char*)p+(p->size&-2));
+    nextChunk->prev_size = (p->size&-2);
+    // erase nextChunk's prev_inuse
+    nextChunk->size = nextChunk->size&-2;
     dumpChunk(p);
-    dumpChunk((freeChunk*)((char*)p+(p->size&-2)));
+    dumpChunk(nextChunk);
+    debug("is nextChunk freed: %d\n", (((freeChunk*)((char*)nextChunk+(nextChunk->size&-2)))->size&1));
+    if((((freeChunk*)((char*)nextChunk+(nextChunk->size&-2)))->size&1)!=1){
+        debug("nextChunk is freed\n");
+    }
 }
 
 // update for inuse bit
@@ -215,7 +228,7 @@ void *myrealloc(void *ptr, size_t size)
             
             p = allocateInTopChunk(alignedSize&-2);
             memcpy(p+0x10, ptr, size);
-            myfree(ptr+0x10);
+            myfree(ptr);
         }
         //max_size += size;
         //debug("max: %u\n", max_size);
