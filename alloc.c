@@ -86,7 +86,7 @@ allocatedChunk* allocateInTopChunk(size_t size){
     size_t topChunkSize = topChunk->size;
     allocatedChunk* p = topChunk;
     topChunk = (allocatedChunk*)((char*)topChunk + size);
-    p->size = size;
+    p->size = size | 1;
     topChunk->size = topChunkSize - size;
     debug("AllocUsingTopChunk:0x%x\tTopChunk: %p\tSize: 0x%x\treturn: %p\n", size, topChunk, topChunk->size, p);
     return p;
@@ -130,6 +130,9 @@ void pushInUnsortedBins(freeChunk* p){
         topChunk = p;
         return;
     }
+    ((freeChunk*)((char*)p+(p->size&-2)))->prev_size = (p->size&-2);
+    dumpChunk(p);
+    dumpChunk((freeChunk*)((char*)p+(p->size&-2)));
 }
 
 // update for inuse bit
@@ -153,6 +156,7 @@ void *myalloc(size_t size)
     }    
     if(p != NULL){
        debug("alloc(0x%x): %p\n", size, (char*)p+0x10);
+       dumpChunk(p);
        return (char*)p+0x10;
     }
 
@@ -175,8 +179,10 @@ void *myalloc(size_t size)
 
     //debug("max: %u\n", max_size);
     //debug("allcated: %p\nsize: 0x%x\n\n", p, size);
-    if(p != NULL)
+    if(p != NULL){
+        dumpChunk(p);
         return (char*)p + 0x10;
+    }
     return NULL;
 }
 
