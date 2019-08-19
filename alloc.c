@@ -30,7 +30,7 @@ freeChunk unsortedBins;
 bool isMallocInited = false;
 
 void dumpChunk(void* chunk){
-    debug("dumpChunk in 0x%p:\n0x%p 0x%p\n0x%p 0x%p\n", chunk, *((uint64_t*)chunk), *((uint64_t*)chunk+1), *((uint64_t*)chunk+2), *((uint64_t*)chunk+3));
+    debug("dumpChunk in 0x%p:\n\t0x%p 0x%p\n\t0x%p 0x%p\n", chunk, *((uint64_t*)chunk), *((uint64_t*)chunk+1), *((uint64_t*)chunk+2), *((uint64_t*)chunk+3));
 }
 
 // initalize Bins & topChunk
@@ -47,6 +47,8 @@ void isFirst(){
 
     // initalize unsortedBins
     memset(&unsortedBins, 0, sizeof(freeChunk));
+    unsortedBins.fd = &unsortedBins;
+    unsortedBins.bk = &unsortedBins;
 
     // allocate topChunk
     topChunk = (allocatedChunk*)sbrk(0x10000);
@@ -95,14 +97,17 @@ bool reallocTopChunk(size_t size){
 allocatedChunk* allocateInTopChunk(size_t size){
     size_t topChunkSize = topChunk->size;
     allocatedChunk* p = topChunk;
+    dumpChunk(topChunk);
     topChunk = (allocatedChunk*)((char*)topChunk + size);
     p->size = size | 1;
     p->prev_size = 0;
     topChunk->size = topChunkSize - size;
+    topChunk->prev_size = 0;
     debug("AllocUsingTopChunk:0x%x\tTopChunk: %p\tSize: 0x%x\treturn: %p\n", size, topChunk, topChunk->size, p);
     if((topChunk->size&-2) < 0x20){
         reallocTopChunk(0x10000);
     }
+    dumpChunk(topChunk);
     return p;
 }
 
@@ -113,6 +118,7 @@ void pushInFastBins(freeChunk* p){
     if( ((char*)p+(p->size&-2)) == ((char*)topChunk) ){
         debug("fastBins: next chunk is topChunk!\n");
         p->size = topChunk->size + (p->size&-2);
+        p->prev_size = 0;
         debug("make topChunk and size to:0x%lx, 0x%lx\n", p, p->size);
         topChunk = p;
         return;
@@ -124,28 +130,104 @@ void pushInFastBins(freeChunk* p){
     debug("fastBin[%d].fd: %p\tp->fd: 0x%p\n",(p->size-0x20)>>4, fastBins[(p->size-0x20)>>4].fd, p->fd);
 }
 
+void linkUnsortedBins(freeChunk* p){
+    debug("link to unsortedBins\n");
+    dumpChunk(p);
+    freeChunk* FD = unsortedBins.fd;
+    unsortedBins.fd = p;
+    FD->bk = p;
+    p->fd = FD;
+    p->bk = &unsortedBins;
+    dumpChunk(p);
+}
+
+void unlinkUnsortedBins(freeChunk* p){
+    debug("unlink to unsortedBins\n");
+    dumpChunk(p->fd);
+    dumpChunk(p);
+    dumpChunk(p->bk);
+    p->bk->fd = p->fd;
+    p->fd->bk = p->bk;
+    debug("\n");
+    dumpChunk(p->fd);
+    dumpChunk(p);
+    dumpChunk(p->bk);
+}
+
 void pushInUnsortedBins(freeChunk* p){
     freeChunk* chk = &unsortedBins;
     debug("unsortedBins is at: %p\tunsortedBin.fd: %p\tunsortedBin.bk: %p\n", chk, chk->fd, chk->bk);
+    // if nextChunk is topChunk
     if( ((char*)p+(p->size&-2)) == ((char*)topChunk) ){
-        debug("unsortedBins: next chunk is topChunk!\n");
+        freeChunk* prevChunk = NULL;
+        // if prevChunk is freed, set prevChunk
+        if((p->size&1) == 0){
+            prevChunk = (freeChunk*)((char*)p-(p->prev_size));
+        }
+        debug("================unsortedBins: next chunk is topChunk!================\n");
         dumpChunk(p);
+        debug("topChunk:\n");
         dumpChunk(topChunk);
         p->size = topChunk->size + (p->size&-2);
         debug("make topChunk and size to:0x%lx, 0x%lx\n", p, p->size);
         topChunk = p;
+        topChunk->prev_size = 0;
+        if(prevChunk != NULL){
+            debug("merge prevChunk with topChunk\n");
+            unlinkUnsortedBins(prevChunk);
+            myfree((char*)prevChunk+0x10);
+        }
         return;
     }
     freeChunk* nextChunk = (freeChunk*)((char*)p+(p->size&-2));
     nextChunk->prev_size = (p->size&-2);
     // erase nextChunk's prev_inuse
-    nextChunk->size = nextChunk->size&-2;
-    dumpChunk(p);
-    dumpChunk(nextChunk);
-    debug("is nextChunk freed: %d\n", (((freeChunk*)((char*)nextChunk+(nextChunk->size&-2)))->size&1));
+    // except fastChunk
+    if((nextChunk->size&-2) > 0x80)
+        nextChunk->size = nextChunk->size&-2;
     if((((freeChunk*)((char*)nextChunk+(nextChunk->size&-2)))->size&1)!=1){
-        debug("nextChunk is freed\n");
+        // merge with nextChunk
+        debug("================nextChunk is freed================\n");
+        debug("\ncurrentChunk:\n");
+        dumpChunk(p);
+        debug("nextChunk:\n");
+        dumpChunk(nextChunk);
+        debug("next of nextChunk:\n");
+        dumpChunk((freeChunk*)((char*)nextChunk+(nextChunk->size&-2)));
+        unlinkUnsortedBins(nextChunk);
+        ((freeChunk*)((char*)nextChunk+(nextChunk->size&-1)))->prev_size += (p->size&-2);
+        p->size += nextChunk->size;
+        debug("\n");
+        dumpChunk(p);
+        debug("nextChunk:\n");
+        dumpChunk(nextChunk);
+        debug("next of nextChunk:\n");
+        dumpChunk((freeChunk*)((char*)nextChunk+(nextChunk->size&-2)));
+        nextChunk = (freeChunk*)((char*)nextChunk+(nextChunk->size&-2)); 
     }
+    if((p->size&1) == 0){
+        // merge with prevChunk
+        freeChunk* prevChunk = (freeChunk*)((char*)p-(p->prev_size));
+        debug("================prevChunk is freed================\n");
+        debug("prevChunk:\n");
+        dumpChunk(prevChunk);
+        debug("currentChunk:\n");
+        dumpChunk(p);
+        debug("nextChunk:\n");
+        dumpChunk(nextChunk);
+        nextChunk->prev_size += (prevChunk->size&-2);
+        prevChunk->size += p->size;
+        debug("\nprevChunk:\n");
+        dumpChunk(prevChunk);
+        debug("\ncurrentChunk:\n");
+        dumpChunk(p);
+        debug("nextChunk:\n");
+        dumpChunk(nextChunk);
+    }else{
+        linkUnsortedBins(p);
+    }
+    
+    debug("unsortedBins is at: %p\tunsortedBin.fd: %p\tunsortedBin.bk: %p\n", chk, chk->fd, chk->bk);
 }
 
 // update for inuse bit
