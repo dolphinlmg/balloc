@@ -75,13 +75,6 @@ freeChunk* findInFastBins(size_t size){
     return NULL;
 }
 
-// find in unsortedBins 
-// not implemented
-// get size without inuse bit
-freeChunk* findInUnsortedBins(size_t size){
-    return NULL;
-}
-
 // expand topChunk
 // get size without inuse bit
 bool reallocTopChunk(size_t size){
@@ -131,7 +124,7 @@ void pushInFastBins(freeChunk* p){
 }
 
 void linkUnsortedBins(freeChunk* p){
-    debug("link to unsortedBins\n");
+    debug("================link to unsortedBins================\n");
     dumpChunk(p);
     freeChunk* FD = unsortedBins.fd;
     unsortedBins.fd = p;
@@ -142,7 +135,7 @@ void linkUnsortedBins(freeChunk* p){
 }
 
 void unlinkUnsortedBins(freeChunk* p){
-    debug("unlink to unsortedBins\n");
+    debug("================unlink to unsortedBins================\n");
     dumpChunk(p->fd);
     dumpChunk(p);
     dumpChunk(p->bk);
@@ -195,8 +188,8 @@ void pushInUnsortedBins(freeChunk* p){
         debug("next of nextChunk:\n");
         dumpChunk((freeChunk*)((char*)nextChunk+(nextChunk->size&-2)));
         unlinkUnsortedBins(nextChunk);
-        ((freeChunk*)((char*)nextChunk+(nextChunk->size&-1)))->prev_size += (p->size&-2);
-        p->size += nextChunk->size;
+        ((freeChunk*)((char*)nextChunk+(nextChunk->size&-2)))->prev_size += (p->size&-2);
+        p->size += (nextChunk->size&-2);
         debug("\n");
         dumpChunk(p);
         debug("nextChunk:\n");
@@ -229,6 +222,35 @@ void pushInUnsortedBins(freeChunk* p){
     
     debug("unsortedBins is at: %p\tunsortedBin.fd: %p\tunsortedBin.bk: %p\n", chk, chk->fd, chk->bk);
 }
+
+// find in unsortedBins 
+// not implemented
+// get size without inuse bit
+freeChunk* findInUnsortedBins(size_t size){
+    freeChunk* FD = unsortedBins.fd;
+    while(FD != &unsortedBins){
+        if((FD->size&-2) > 0x20 + size){
+            if((FD->size&-2) > 0x80){
+                unlinkUnsortedBins(FD);
+                freeChunk* p = (freeChunk*)((char*)FD+size);
+                freeChunk* nextChunk = (freeChunk*)((char*)FD+(FD->size&-2));
+                p->size = FD->size - size;
+                p->size |= 1;
+                p->prev_size = 0;
+                nextChunk->prev_size -= size;
+                FD->size = (FD->size&1) + size;
+                linkUnsortedBins(p);
+                return FD;
+            }else{
+                return NULL;
+            }
+        }
+        FD = FD->fd;
+    }
+    return NULL;
+}
+
+
 
 // update for inuse bit
 void *myalloc(size_t size)
