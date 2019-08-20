@@ -229,7 +229,9 @@ void pushInUnsortedBins(freeChunk* p){
 freeChunk* findInUnsortedBins(size_t size){
     freeChunk* FD = unsortedBins.fd;
     while(FD != &unsortedBins){
+        // if chunk can splited == splited chunk is more than 0x20
         if((FD->size&-2) > 0x20 + size){
+            // if splited chunk is more than 0x80
             if((FD->size&-2) > 0x80){
                 unlinkUnsortedBins(FD);
                 freeChunk* p = (freeChunk*)((char*)FD+size);
@@ -241,8 +243,9 @@ freeChunk* findInUnsortedBins(size_t size){
                 FD->size = (FD->size&1) + size;
                 linkUnsortedBins(p);
                 return FD;
-            }else{
-                return NULL;
+            }else{ // if splited chunk is fastChunk
+                // just return chunk
+                return FD;
             }
         }
         FD = FD->fd;
